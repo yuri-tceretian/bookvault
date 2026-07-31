@@ -161,3 +161,84 @@ def test_ensure_logged_in_never_calls_session_run_directly():
     source = inspect.getsource(mcp_server._ensure_logged_in)
     assert "session.run(" not in source
     assert "session.run_async(" not in source
+
+
+async def test_get_book_details_returns_detail_fields_and_files(monkeypatch):
+    credentials.save("user@example.com", "hunter2")
+    client_factory(
+        monkeypatch,
+        session,
+        arts_by_id={
+            1: {
+                "id": 1,
+                "title": "Detail Book",
+                "art_type": 0,
+                "persons": [{"full_name": "Author A", "role": "author"}],
+                "cover_url": "/pub/c/cover/1.jpg",
+                "url": "/book/a/detail-book-1/",
+                "isbn": "978-0-00-000000-0",
+                "html_annotation": "<p>Hello &amp; welcome</p>",
+                "genres": [{"name": "Fantasy"}, {"name": "Adventure"}],
+                "tags": [{"name": "magic"}],
+                "publication_date": "2024-05-01",
+            }
+        },
+        files_by_id={
+            1: [
+                {
+                    "id": 100,
+                    "extension": "epub",
+                    "is_additional": False,
+                    "size": 2_000_000,
+                    "filename": "book.epub",
+                },
+                {"id": 101, "extension": "fb2.zip", "is_additional": False, "size": 1_500_000},
+            ]
+        },
+    )
+
+    details = await mcp_server.get_book_details(1)
+
+    assert details["id"] == 1
+    assert details["title"] == "Detail Book"
+    assert details["authors"] == ["Author A"]
+    assert details["isbn"] == "978-0-00-000000-0"
+    assert "Hello" in (details["description"] or "")
+    assert "welcome" in (details["description"] or "")
+    assert details["genres"] == ["Fantasy", "Adventure"]
+    assert details["tags"] == ["magic"]
+    assert details["publication_date"] == "2024-05-01"
+    assert details["best_file"]["extension"] == "epub"
+    assert details["best_file"]["size_mb"] == 2.0
+    assert len(details["files"]) == 2
+
+
+async def test_get_book_details_can_skip_files(monkeypatch):
+    credentials.save("user@example.com", "hunter2")
+    fake = client_factory(
+        monkeypatch,
+        session,
+        arts_by_id={
+            1: {
+                "id": 1,
+                "title": "No Files Needed",
+                "art_type": 0,
+                "persons": [],
+                "cover_url": None,
+            }
+        },
+        files_by_id={1: [{"id": 100, "extension": "epub", "is_additional": False, "size": 8}]},
+    )
+
+    details = await mcp_server.get_book_details(1, include_files=False)
+
+    assert details["id"] == 1
+    assert "files" not in details
+    assert "best_file" not in details
+    # get_files must not have been required; art was fetched once
+    assert fake.get_art_calls == [1]
+
+
+async def test_get_book_details_raises_when_not_logged_in():
+    with pytest.raises(RuntimeError, match="Not logged in"):
+        await mcp_server.get_book_details(1)

@@ -99,6 +99,25 @@ async def list_library(limit: int = 50) -> list:
 
 
 @mcp.tool()
+async def get_book_details(art_id: int, include_files: bool = True) -> dict:
+    """Fetch full details for one purchased book/audiobook by art id.
+
+    Combines `GET .../arts/{id}` detail metadata (description, ISBN, genres,
+    tags when present) with the shared library-shaped fields, and by default
+    also lists downloadable files/formats via `files/grouped`.
+    """
+    await _ensure_logged_in()
+    client = session.current_client()
+
+    def _sync():
+        art = client.get_art(art_id)
+        files = client.get_files(art_id) if include_files else None
+        return LitresClient.normalize_art_details(art, files)
+
+    return await session.run_async(_sync)
+
+
+@mcp.tool()
 async def download_book(art_id: int) -> dict:
     """Download one purchased book/audiobook by its art id to a local
     folder (~/Downloads/litres-library), returning the saved file path."""

@@ -20,7 +20,8 @@ traffic, just reused, not a forged fingerprint.
 
 Endpoints and response shapes below were all confirmed against a real
 account: `GET .../users/me/arts` (paginated via `payload.pagination.next_page`,
-items in `payload.data`), `GET .../arts/{id}/files/grouped` (format options
+items in `payload.data`), `GET .../arts/{id}` (single-art detail, incl. ISBN /
+annotation / genres when present), `GET .../arts/{id}/files/grouped` (format options
 grouped under `payload.data[].files[]`), and
 `GET /download_book/{art_id}/{release_file_id}/{name}.{ext}` (streams the
 actual file -- verified against a real purchased epub).
@@ -30,6 +31,7 @@ from __future__ import annotations
 import logging
 import os
 import random
+import re
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -38,6 +40,9 @@ from urllib.parse import parse_qs, urlparse
 
 import httpx
 from playwright.sync_api import BrowserContext, sync_playwright
+
+# Strip HTML tags / entities from litres annotations for a plain-text description.
+_HTML_RE = re.compile(r"<.*?>|&([a-z0-9]+|#[0-9]{1,6}|#x[0-9a-f]{1,6});", re.I)
 
 # curl_cffi lets the (streaming) download carry a real Chrome TLS/JA3+JA4
 # fingerprint, so it matches the Chromium session that solved DDoS-Guard's
@@ -617,6 +622,98 @@ class LitresClient:
             "my_art_status": art.get("my_art_status"),
             "release_file_id": art.get("release_file_id"),
         }
+
+    @staticmethod
+    def normalize_art_details(art: dict, files: Optional[list] = None) -> dict:
+        """Full single-book details: library-shaped metadata plus detail-only
+        fields (description, ISBN, genres, tags) and optional file listing.
+
+        `art` is a raw `/arts/{id}` (or library-list) payload. `files` is the
+        flat list from `get_files` when the caller wants formats/sizes too.
+        """
+        meta = LitresClient.normalize_library_item(art)
+
+        html = art.get("html_annotation") or art.get("annotation") or ""
+        description = _HTML_RE.sub("", html).strip() if html else ""
+
+        genres: list[str] = []
+        for genre in art.get("genres") or []:
+            if isinstance(genre, dict):
+                name = genre.get("name")
+                if name:
+                    genres.append(str(name))
+            elif genre:
+                genres.append(str(genre))
+
+        tags: list[str] = []
+        for tag in art.get("tags") or []:
+            if isinstance(tag, dict):
+                name = tag.get("name")
+                if name:
+                    tags.append(str(name))
+            elif tag:
+                tags.append(str(tag))
+
+        meta.update(
+            {
+                "isbn": art.get("isbn") or None,
+                "publication_date": art.get("publication_date") or art.get("date_written_at"),
+                "description": description or None,
+                "genres": genres,
+                "tags": tags,
+            }
+        )
+
+        if files is not None:
+            file_rows = []
+            for f in files:
+                size = f.get("size")
+                file_rows.append(
+                    {
+                        "id": f.get("id"),
+                        "filename": f.get("filename"),
+                        "extension": f.get("extension") or LitresClient.file_extension(f),
+                        "file_type": f.get("file_type"),
+                        "mime": f.get("mime"),
+                        "size": size,
+                        "size_mb": round(size / 1e6, 2) if size else None,
+                        "is_additional": bool(f.get("is_additional")),
+                    }
+                )
+            best = LitresClient.pick_best_file(files)
+            best_summary = None
+            if best is not None:
+                bsize = best.get("size")
+                best_summary = {
+                    "id": best.get("id"),
+                    "filename": best.get("filename"),
+                    "extension": LitresClient.file_extension(best),
+                    "file_type": best.get("file_type"),
+                    "size": bsize,
+                    "size_mb": round(bsize / 1e6, 2) if bsize else None,
+                }
+            meta["files"] = file_rows
+            meta["best_file"] = best_summary
+
+        return meta
+
+    def get_art(self, art_id, should_cancel=None) -> dict:
+        """Fetch one art's detail payload from `GET .../arts/{id}`.
+
+        Richer than a library-list row when litres includes detail-only fields
+        (ISBN, HTML annotation, genres, tags). Raises LitresAuthError on
+        non-OK responses or an empty payload.
+        """
+        resp = self._get_retrying(f"{API_BASE}/arts/{art_id}", should_cancel=should_cancel)
+        if not resp.ok:
+            logger.warning("Art detail fetch failed for %s: HTTP %s", art_id, resp.status)
+            raise LitresAuthError(
+                f"Could not fetch art {art_id} ({resp.status}): {resp.text()[:300]}"
+            )
+        data = (resp.json().get("payload") or {}).get("data")
+        if not data:
+            raise LitresAuthError(f"Could not fetch art {art_id}: empty payload")
+        return data
 
     def get_files(self, art_id, should_cancel=None) -> list:
         """Flat list of {id, extension, file_type, mime, size, is_additional} for one art."""

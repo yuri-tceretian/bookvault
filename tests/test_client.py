@@ -779,3 +779,50 @@ def test_normalize_library_item_handles_sparse_art():
     assert meta["cover_url"] is None
     assert meta["url"] is None
     assert meta["prices"] is None
+
+
+def test_normalize_art_details_adds_description_isbn_genres_and_files():
+    art = {
+        "id": 9,
+        "title": "Detailed",
+        "art_type": 0,
+        "persons": [{"full_name": "A", "role": "author"}],
+        "cover_url": None,
+        "isbn": "123",
+        "html_annotation": "<b>Bold</b> text",
+        "genres": [{"name": "Sci-Fi"}],
+        "tags": ["space"],
+        "publication_date": "2020-01-01",
+    }
+    files = [
+        {"id": 1, "extension": "epub", "is_additional": False, "size": 1_000_000},
+        {"id": 2, "file_type": "zip_with_mp3", "is_additional": False, "size": 50_000_000},
+    ]
+    meta = LitresClient.normalize_art_details(art, files)
+    assert meta["isbn"] == "123"
+    assert meta["description"] == "Bold text"
+    assert meta["genres"] == ["Sci-Fi"]
+    assert meta["tags"] == ["space"]
+    assert meta["publication_date"] == "2020-01-01"
+    # Audiobook bundle wins pick_best_file over epub.
+    assert meta["best_file"]["extension"] == "zip"
+    assert len(meta["files"]) == 2
+
+
+def test_get_art_returns_payload_data():
+    def handler(url, params=None, headers=None, timeout=None):
+        assert url.endswith("/arts/42")
+        return FakeAPIResponse(
+            200,
+            json_data={"payload": {"data": {"id": 42, "title": "From API", "isbn": "999"}}},
+        )
+
+    client = make_bare_client(handler)
+    art = client.get_art(42)
+    assert art == {"id": 42, "title": "From API", "isbn": "999"}
+
+
+def test_get_art_raises_on_http_error():
+    client = make_bare_client(lambda *a, **k: FakeAPIResponse(404, text_data="missing"))
+    with pytest.raises(LitresAuthError, match="Could not fetch art 7"):
+        client.get_art(7)
