@@ -85,7 +85,8 @@ async def list_library(limit: int = 50) -> list:
 
     def _sync():
         items = []
-        for art in client.iter_library(limit=limit):
+        # Page size 10; `limit` is only the max number of items returned.
+        for art in client.iter_library(limit=10):
             items.append(LitresClient.normalize_library_item(art))
             if len(items) >= limit:
                 break
@@ -110,7 +111,7 @@ async def download_book(art_id: int) -> dict:
         if library_root is not None:
             # Prefer a full list row when present; otherwise a minimal stub.
             art = None
-            for item in client.iter_library(limit=100_000):
+            for item in client.iter_library(limit=10):
                 if item.get("id") == art_id:
                     art = item
                     break

@@ -135,7 +135,7 @@ class FakeLitresClient:
     def close(self):
         self.closed = True
 
-    def iter_library(self, limit: int = 100):
+    def iter_library(self, limit: int = 10):
         yield from self.library
 
     def get_art(self, art_id, should_cancel=None):

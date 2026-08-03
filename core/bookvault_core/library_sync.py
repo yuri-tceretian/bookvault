@@ -201,7 +201,9 @@ def sync_library(
     library_root = Path(library_root)
     library_root.mkdir(parents=True, exist_ok=True)
 
-    arts = list(client.iter_library(limit=100_000))
+    # Page size 10 keeps each litres.ru listing request small; iter_library
+    # follows pagination until the full library is exhausted.
+    arts = list(client.iter_library(limit=10))
     if art_ids is not None:
         arts = [a for a in arts if a.get("id") in art_ids]
 

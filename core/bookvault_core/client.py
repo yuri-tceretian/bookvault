@@ -462,8 +462,13 @@ class LitresClient:
             )
         logger.info("Login succeeded for %s (%d app-level headers captured)", login, len(self._extra_headers))
 
-    def iter_library(self, limit: int = 100) -> Iterator[dict]:
-        """Yield every art (book/audiobook/...) the user owns."""
+    def iter_library(self, limit: int = 10) -> Iterator[dict]:
+        """Yield every art (book/audiobook/...) the user owns.
+
+        `limit` is the per-page page size sent to litres.ru (default 10), not a
+        cap on how many titles are returned -- pagination continues until the
+        listing is exhausted.
+        """
         url = f"{API_BASE}/users/me/arts"
         params = {"limit": limit}
         page_count, item_count = 0, 0
