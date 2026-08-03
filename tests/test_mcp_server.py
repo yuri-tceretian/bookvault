@@ -53,12 +53,25 @@ async def test_list_library_bootstraps_via_restore_session(monkeypatch):
     client_factory(
         monkeypatch,
         session,
-        library=[{"id": 1, "title": "Book One"}, {"id": 2, "title": "Book Two"}],
+        library=[
+            {
+                "id": 1,
+                "title": "Book One",
+                "art_type": 0,
+                "persons": [{"full_name": "Author A", "role": "author"}],
+            },
+            {"id": 2, "title": "Book Two", "art_type": 1, "persons": []},
+        ],
     )
 
     items = await mcp_server.list_library()
 
-    assert items == [{"id": 1, "title": "Book One"}, {"id": 2, "title": "Book Two"}]
+    assert len(items) == 2
+    assert items[0]["id"] == 1
+    assert items[0]["title"] == "Book One"
+    assert items[0]["authors"] == ["Author A"]
+    assert items[1]["id"] == 2
+    assert items[1]["is_audio"] is True
 
 
 async def test_list_library_respects_limit(monkeypatch):
@@ -90,6 +103,76 @@ async def test_download_book_success(monkeypatch, tmp_path):
     assert result["path"] == str(tmp_path / "litres-library" / "1.epub")
     assert (tmp_path / "litres-library" / "1.epub").read_bytes() == b"FAKEDATA"
     assert result["size_bytes"] == len(b"FAKEDATA")
+    assert result["layout"] == "flat"
+
+
+async def test_download_book_into_library_dir(monkeypatch, tmp_path):
+    lib = tmp_path / "abs-lib"
+    monkeypatch.setenv("LITRES_LIBRARY_DIR", str(lib))
+    credentials.save("user@example.com", "hunter2")
+    client_factory(
+        monkeypatch,
+        session,
+        library=[
+            {
+                "id": 1,
+                "title": "Book One",
+                "art_type": 1,
+                "persons": [{"full_name": "Author A", "role": "author"}],
+                "last_released_at": "2024-01-01",
+            }
+        ],
+        files_by_id={
+            1: [
+                {
+                    "id": 100,
+                    "extension": "m4b",
+                    "file_type": "mobile_version_mp4",
+                    "is_additional": False,
+                    "size": 8,
+                }
+            ]
+        },
+    )
+
+    result = await mcp_server.download_book(1)
+
+    assert result["ok"] is True
+    assert result["layout"] == "library"
+    assert (lib / "Author A" / "Book One" / "metadata.json").exists()
+
+
+async def test_sync_library_now(monkeypatch, tmp_path):
+    lib = tmp_path / "abs-lib"
+    monkeypatch.setenv("LITRES_LIBRARY_DIR", str(lib))
+    credentials.save("user@example.com", "hunter2")
+    client_factory(
+        monkeypatch,
+        session,
+        library=[
+            {
+                "id": 1,
+                "title": "Book One",
+                "art_type": 1,
+                "persons": [{"full_name": "Author A", "role": "author"}],
+                "last_released_at": "2024-01-01",
+            }
+        ],
+        files_by_id={
+            1: [
+                {
+                    "id": 100,
+                    "extension": "m4b",
+                    "file_type": "mobile_version_mp4",
+                    "is_additional": False,
+                    "size": 8,
+                }
+            ]
+        },
+    )
+    result = await mcp_server.sync_library_now(audio_only=True)
+    assert result["ok"] is True
+    assert result["done"] == 1
 
 
 async def test_download_book_with_no_downloadable_file(monkeypatch, tmp_path):

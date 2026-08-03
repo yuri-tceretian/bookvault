@@ -1,5 +1,21 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **On-disk library sync (ABS / litres-downloader layout).** Set
+  `LITRES_LIBRARY_DIR` to a folder; BookVault can download purchased titles into
+  `{Author}/{Title}/` with a compatible `metadata.json` (including
+  `last_release` for idempotent re-syncs). Audiobook `zip_with_mp3` bundles are
+  extracted to tracks. Wire-up:
+  - Web: **Sync library** button + `POST /activity/sync` (new `SYNCING` activity).
+  - Optional autosync: `LITRES_AUTOSYNC=1` (+ interval / audio-only flags).
+  - MCP: `sync_library_now`, and `download_book` writes into the library when
+    `LITRES_LIBRARY_DIR` is set (otherwise keeps the flat `LITRES_DOWNLOAD_DIR`
+    layout).
+- Client helpers `normalize_library_item`, `normalize_art_details`, and `get_art`
+  for richer metadata (ISBN, description, genres) used by the library writer.
+
 ## [1.2.0] - Linux installer (AppImage)
 
 Adds a Linux **AppImage**, completing the desktop trio (macOS / Windows / Linux).

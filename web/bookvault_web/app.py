@@ -22,8 +22,9 @@ from pydantic import BaseModel
 
 from bookvault_core import cache, session
 from bookvault_core.client import AUDIOBOOK_FILE_TYPES, EBOOK_EXTENSIONS, LitresAuthError
+from bookvault_core.library_fs import library_root_from_env
 
-from . import activity, prefs
+from . import activity, autosync, prefs
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +42,12 @@ async def lifespan(app: FastAPI):
     # keychain), and otherwise shows its login form. LITRES_LOGIN/PASSWORD
     # in .env are for the headless MCP server only (see session.py).
     await anyio.to_thread.run_sync(partial(session.restore_session, allow_env_login=False))
-    yield
-    await anyio.to_thread.run_sync(session.shutdown)
+    autosync.start_background_scheduler(session.current_client, prefs.snapshot)
+    try:
+        yield
+    finally:
+        autosync.stop_background_scheduler()
+        await anyio.to_thread.run_sync(session.shutdown)
 
 
 app = FastAPI(lifespan=lifespan)
@@ -64,6 +69,8 @@ def index(request: Request):
             # saved choices (no flash before app.js hydrates the rest).
             "ebook_format": prefs.snapshot()["ebook_format"],
             "audiobook_format": prefs.snapshot()["audiobook_format"],
+            "library_sync_enabled": library_root_from_env() is not None,
+            "library_dir": str(library_root_from_env()) if library_root_from_env() else None,
         },
     )
 
@@ -193,7 +200,13 @@ def get_activity():
     # Fold the shared UI state (selection + formats) into the poll response the
     # frontend already fetches, so every open browser converges on the same
     # ticked books and format choices -- not just the same progress.
-    return {**activity.snapshot(), "prefs": prefs.snapshot()}
+    root = library_root_from_env()
+    return {
+        **activity.snapshot(),
+        "prefs": prefs.snapshot(),
+        "library_sync_enabled": root is not None,
+        "library_dir": str(root) if root else None,
+    }
 
 
 @app.get("/prefs")
@@ -226,6 +239,42 @@ def check_activity(req: SweepRequest):
     if client is None:
         return JSONResponse({"ok": False, "error": "Not logged in"}, status_code=401)
     started = activity.check_sizes(client, req.selected, live=req.live)
+    return {"ok": True, "started": started}
+
+
+class SyncRequest(BaseModel):
+    audio_only: bool = True
+    ebook_format: Optional[str] = None
+    audiobook_format: Optional[str] = None
+    # Optional subset; None = entire library (subject to audio_only).
+    art_ids: Optional[List[int]] = None
+
+
+@app.post("/activity/sync")
+def sync_activity(req: SyncRequest):
+    client = session.current_client()
+    if client is None:
+        return JSONResponse({"ok": False, "error": "Not logged in"}, status_code=401)
+    if library_root_from_env() is None:
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "LITRES_LIBRARY_DIR is not configured — set it to an on-disk library path.",
+            },
+            status_code=400,
+        )
+    art_ids = set(req.art_ids) if req.art_ids is not None else None
+    # Prefer explicit request formats, else server prefs.
+    p = prefs.snapshot()
+    started = activity.start_sync(
+        client,
+        audio_only=req.audio_only,
+        preferred_ext=req.ebook_format if req.ebook_format is not None else p.get("ebook_format"),
+        preferred_file_type=req.audiobook_format
+        if req.audiobook_format is not None
+        else p.get("audiobook_format"),
+        art_ids=art_ids,
+    )
     return {"ok": True, "started": started}
 
 
